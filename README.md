@@ -64,7 +64,7 @@ opencv-python
 matplotlib
 scikit-learn
 pandas
-
+```
 or install in the commandline
 ```bash
 pip install -r requirements.txt
