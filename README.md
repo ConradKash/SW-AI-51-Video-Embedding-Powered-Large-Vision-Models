@@ -101,3 +101,25 @@ Dental caries, or tooth decay, is the destruction of tooth hard tissue by acids 
 In dentistry, calculus or tartar is a form of hardened dental plaque. It is caused by precipitation of minerals from saliva and gingival crevicular fluid in plaque on the teeth.
 
 ![Caries](resources\calculus.jpg)
+
+
+
+# INTERFACES
+1. # WEB INTERFACE
+Ensure that you have all the requirements installed, especially the streamlit package to access the web interface locally
+```bash
+pip install -r requirements.txt
+```
+or 
+```bash
+pip install streamlit
+```
+
+To run the web interface use the commandline. 
+```bash
+streamlit run web/main.py
+```
+Make sure you are the the home directory. 
+```bash
+cd SW-AI-51 Video-Embedding–Powered Large Vision Models for Dental Disease Detection in Uganda
+```
