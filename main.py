@@ -1,6 +1,7 @@
 import cv2
 import os
 import torch
+from sympy.strategies.core import switch
 from ultralytics import  YOLO
 from  util.detection import detect_video, detect_image
 
@@ -18,20 +19,19 @@ print ("3. Camera")
 print ("4. Exit")
 choice = input(">>>: ")
 
-match choice:
-    case 1:
-        print("Enter Video path")
-        input_video_path = input(">>>: ")
-        detect_video(input_video_path)
-    case 2:
-        print("Enter Image path")
-        input_video_path = input(">>>: ")
-        detect_image(input_video_path)
-    case 3:
-        print("Opening Camera")
-        detect_video(0) 
-    case 4:
-        exit()
+if choice == "1":
+    print("Enter Video path")
+    input_video_path = input(">>>: ")
+    detect_video(input_video_path)
+elif choice == "2":
+    print("Enter Image path")
+    input_video_path = input(">>>: ")
+    detect_image(input_video_path)
+elif choice == "3":
+    print("Opening Camera")
+    detect_video(0) 
+elif choice == "4":
+    exit()
 
 print ("================= Dental Disease detection ===================")
 print ("Choose models:")
