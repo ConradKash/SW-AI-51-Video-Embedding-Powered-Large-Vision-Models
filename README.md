@@ -69,41 +69,6 @@ or install in the commandline
 ```bash
 pip install -r requirements.txt
 ```
-
-## Definitions of Dental Classes
-1. Hypodonthia
-
-Hypodontia is the developmental absence of one or more teeth, excluding third molars, and is one of the most common dental anomalies. It can be caused by a combination of genetic and environmental factors and is often associated with other syndromes like ectodermal dysplasia or Down's syndrome
-
-![Hypodonthia](resources\hypodonthia.jpg)
-
-2. Tooth Discoloration
-Teeth discoloration is caused by stains from food, drinks, and tobacco (extrinsic) and internal factors like aging, trauma, medications, and certain illnesses
-
-![Tooth Discoloration](resources\ToothDiscoloration.jpg)
-
-3. Mouth Ulcer
-A mouth ulcer is a painful sore, or ulcer, on the lining of the mouth that can appear on the cheeks, lips, gums, or tongue
-
-![Tooth Discoloration](resources\ulcer.jpg)
-
-4. Gingivitis
-Gingivitis is a reversible, early form of gum disease causing inflamed, red, swollen, and bleeding gums, often due to poor oral hygiene leading to plaque buildup
-
-![Tooth Discoloration](resources\Gingivitis.jpg)
-
-5. Caries
-Dental caries, or tooth decay, is the destruction of tooth hard tissue by acids produced by plaque bacteria feeding on sugars. It starts as a white spot, progressing to brown or black spots and then cavities as acid erodes enamel.
-
-![Caries](resources\caries.jpg)
-
-6. Calculus
-In dentistry, calculus or tartar is a form of hardened dental plaque. It is caused by precipitation of minerals from saliva and gingival crevicular fluid in plaque on the teeth.
-
-![Caries](resources\calculus.jpg)
-
-
-
 # INTERFACES
 1. # WEB INTERFACE
 Ensure that you have all the requirements installed, especially the streamlit package to access the web interface locally
@@ -123,3 +88,40 @@ Make sure you are the the home directory.
 ```bash
 cd SW-AI-51 Video-Embedding–Powered Large Vision Models for Dental Disease Detection in Uganda
 ```
+
+
+## Definitions of Dental Classes
+1. Hypodonthia
+
+Hypodontia is the developmental absence of one or more teeth, excluding third molars, and is one of the most common dental anomalies. It can be caused by a combination of genetic and environmental factors and is often associated with other syndromes like ectodermal dysplasia or Down's syndrome
+
+<img src="resources\hypodonthia.jpg" alt="hypodonthia" width="200" />
+
+2. Tooth Discoloration
+Teeth discoloration is caused by stains from food, drinks, and tobacco (extrinsic) and internal factors like aging, trauma, medications, and certain illnesses
+
+<img src="resources\ToothDiscoloration.jpg" alt="Tooth Discolorationt" width="200" />
+
+3. Mouth Ulcer
+A mouth ulcer is a painful sore, or ulcer, on the lining of the mouth that can appear on the cheeks, lips, gums, or tongue
+
+<img src="resources\ulcer.jpg" alt="Mouth Ulcer" width="200" />
+
+4. Gingivitis
+Gingivitis is a reversible, early form of gum disease causing inflamed, red, swollen, and bleeding gums, often due to poor oral hygiene leading to plaque buildup
+
+<img src="resources\Gingivitis.jpg" alt="Gingivitis" width="200" />
+
+5. Caries
+Dental caries, or tooth decay, is the destruction of tooth hard tissue by acids produced by plaque bacteria feeding on sugars. It starts as a white spot, progressing to brown or black spots and then cavities as acid erodes enamel.
+
+<img src="\resources\caries.jpg" alt="caries" width="200" />
+
+6. Calculus
+In dentistry, calculus or tartar is a form of hardened dental plaque. It is caused by precipitation of minerals from saliva and gingival crevicular fluid in plaque on the teeth.
+
+<img src="resources\calculus.jpg" alt="calculus" width="200" />
+
+
+
+
