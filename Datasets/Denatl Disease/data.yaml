@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 6
+names: ['Calculus', 'Caries', 'Discoloration', 'Gingivitis', 'Hypodontia', 'Ulcer']
+
+roboflow:
+  workspace: ismail-kqbnv
+  project: denatl-disease-mtmuf
+  version: 1
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/ismail-kqbnv/denatl-disease-mtmuf/dataset/1
