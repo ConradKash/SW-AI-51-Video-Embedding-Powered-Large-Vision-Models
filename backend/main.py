@@ -32,11 +32,6 @@ def read_root():
     return {"Hello": "World"}
 
 
-@app.get("/predict")
-def read_item(item_id: int, q: Union[str, None] = None):
-    return {"item_id": item_id, "q": q}
-
-
 @app.post("/predict")
 async def make_prediction(file: UploadFile = File(...)):
     file_name = file.filename

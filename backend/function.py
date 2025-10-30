@@ -4,6 +4,7 @@ import torch.nn as nn
 from PIL import Image
 from pathlib import Path
 import torchvision.transforms as transforms
+import warnings
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 num_classes = 6
@@ -26,7 +27,7 @@ class CustomCLIPVisionTransformer(nn.Module):
         # Suppress known QuickGELU mismatch warning emitted by open_clip.factory
         # by temporarily filtering that specific UserWarning. This avoids noisy
         # logs while keeping other warnings visible.
-        import warnings
+
         with warnings.catch_warnings():
             warnings.filterwarnings(
                 "ignore",
