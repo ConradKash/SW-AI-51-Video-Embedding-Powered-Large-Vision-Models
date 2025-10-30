@@ -5,6 +5,7 @@ from PIL import Image
 from pathlib import Path
 import torchvision.transforms as transforms
 import warnings
+import io
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 num_classes = 6
@@ -149,3 +150,34 @@ def predict(image_path):
     except Exception as e:
         print(f"Error processing {image_path}: {e}")
         return None, e
+
+
+# --- Preprocessing Pipeline (reusable) ---
+preprocess = transforms.Compose([
+    transforms.Resize(256),
+    transforms.CenterCrop(224),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225]),
+])
+
+
+def predict_from_bytes(frame_bytes: bytes):
+    """
+    Run inference directly from raw image bytes (JPEG/PNG).
+    Returns: (predicted_class: str, confidence: float)
+    """
+    try:
+        image = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
+        input_tensor = preprocess(image).unsqueeze(0).to(device)
+
+        with torch.no_grad():
+            logits = best_model_clip(input_tensor)
+            probabilities = torch.softmax(logits, dim=1)
+            predicted_idx = torch.argmax(probabilities, dim=1).item()
+            confidence = probabilities[0, predicted_idx].item()
+            predicted_class = class_names[predicted_idx]
+
+        return predicted_class, confidence
+    except Exception as e:
+        raise RuntimeError(f"Prediction failed: {str(e)}") from e

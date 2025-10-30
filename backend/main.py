@@ -1,5 +1,4 @@
-from typing import Union
-from backend.function import predict
+from backend.function import predict, predict_from_bytes
 from fastapi import FastAPI, File, UploadFile
 from fastapi.staticfiles import StaticFiles
 import secrets
@@ -9,7 +8,9 @@ import json
 import io
 import base64
 from fastapi import WebSocket, WebSocketDisconnect
-from PIL import Image
+import asyncio
+import datetime
+import traceback
 
 app = FastAPI()
 
@@ -58,79 +59,149 @@ async def make_prediction(file: UploadFile = File(...)):
 
 @app.websocket("/ws/predict")
 async def websocket_predict(websocket: WebSocket):
-    """WebSocket endpoint that receives frames and returns predictions.
-
-    Behavior:
-    - Accepts either raw binary frames (JPEG/PNG bytes) or text messages containing
-      JSON {"frame": "data:image/jpeg;base64,..."}.
-    - Accepts an optional JSON message to set `predict_every` e.g. {"predict_every":5}.
-    - Sends an acknowledgement for each frame and sends a prediction result every
-      `predict_every` frames.
-    """
     await websocket.accept()
     frame_count = 0
-    predict_every = 5  # default: predict every 5th frame
+    predict_every_frames = 5
+    predict_every_seconds = None
+    running = False
+    latest_frame_bytes: bytes | None = None
+    predictor_task: asyncio.Task | None = None
+    prediction_lock = asyncio.Lock()
+
+    print("WebSocket /ws/predict connected")
+
+    async def _run_prediction(frame_bytes: bytes):
+        """Run prediction and send result over WebSocket."""
+        try:
+            predicted_class, confidence = await asyncio.get_running_loop().run_in_executor(
+                None, predict_from_bytes, frame_bytes
+            )
+            payload = {
+                "type": "prediction",
+                "predicted_class": predicted_class,
+                "confidence": confidence,
+                "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
+            }
+            await websocket.send_json(payload)
+        except Exception as e:
+            await websocket.send_json({"type": "error", "message": str(e)})
+
+    async def send_prediction_every_interval(seconds: int):
+        """Background task: predict on latest frame every N seconds."""
+        try:
+            while running:
+                if latest_frame_bytes is None:
+                    await asyncio.sleep(0.5)
+                    continue
+                async with prediction_lock:
+                    # Use a copy to avoid mutation during sleep
+                    frame_copy = latest_frame_bytes
+                await _run_prediction(frame_copy)
+                await asyncio.sleep(seconds)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            await websocket.send_json({
+                "type": "error",
+                "message": "Background predictor crashed",
+                "trace": traceback.format_exc()
+            })
 
     try:
         while True:
             message = await websocket.receive()
 
-            # Text messages (JSON control or base64 frame)
-            if "text" in message and message["text"] is not None:
-                try:
-                    payload = json.loads(message["text"])
-                except Exception:
-                    await websocket.send_text(json.dumps({"error": "invalid json"}))
-                    continue
+            # --- Handle binary frame ---
+            if message.get("type") == "websocket.receive" and "bytes" in message:
+                latest_frame_bytes = message["bytes"]
+                frame_count += 1
+                await websocket.send_json({"type": "ack", "frame_count": frame_count})
 
-                # Update control parameters
-                if "predict_every" in payload:
-                    try:
-                        predict_every = int(payload["predict_every"])
-                        await websocket.send_text(json.dumps({"info": f"predict_every set to {predict_every}"}))
-                    except Exception:
-                        await websocket.send_text(json.dumps({"error": "invalid predict_every"}))
-                    continue
-
-                # If payload contains a base64 frame
-                if "frame" in payload:
-                    b64 = payload["frame"].split(",")[-1]
-                    try:
-                        frame_bytes = base64.b64decode(b64)
-                    except Exception:
-                        await websocket.send_text(json.dumps({"error": "invalid base64 frame"}))
-                        continue
-                else:
-                    await websocket.send_text(json.dumps({"error": "no frame in message"}))
-                    continue
-
-            # Binary frames sent directly
-            elif "bytes" in message and message["bytes"] is not None:
-                frame_bytes = message["bytes"]
-            else:
-                # Unknown message type
-                await websocket.send_text(json.dumps({"error": "unsupported message type"}))
+                if running and predict_every_frames and frame_count % predict_every_frames == 0:
+                    asyncio.create_task(_run_prediction(latest_frame_bytes))
                 continue
 
-            # Open image and run prediction when appropriate
-            try:
-                img = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
-            except Exception as e:
-                await websocket.send_text(json.dumps({"error": f"cannot open image: {e}"}))
-                continue
-
-            frame_count += 1
-
-            if frame_count % predict_every == 0:
+            # --- Handle text message ---
+            if message.get("type") == "websocket.receive" and "text" in message:
                 try:
-                    result = predict(img)
-                    await websocket.send_text(json.dumps({"type": "prediction", "frame": frame_count, "result": result}))
-                except Exception as e:
-                    await websocket.send_text(json.dumps({"type": "prediction_error", "frame": frame_count, "error": str(e)}))
-            else:
-                # lightweight ack
-                await websocket.send_text(json.dumps({"type": "ack", "frame": frame_count}))
+                    data = json.loads(message["text"])
+                except json.JSONDecodeError:
+                    await websocket.send_json({"type": "error", "message": "Invalid JSON"})
+                    continue
+
+                # --- Control: start/stop ---
+                if data.get("action") == "start":
+                    if not running:
+                        running = True
+                        if predict_every_seconds:
+                            predictor_task = asyncio.create_task(
+                                send_prediction_every_interval(
+                                    predict_every_seconds)
+                            )
+                        await websocket.send_json({"type": "status", "message": "analysis_started"})
+                    else:
+                        await websocket.send_json({"type": "status", "message": "already_running"})
+                    continue
+
+                if data.get("action") == "stop":
+                    running = False
+                    if predictor_task:
+                        predictor_task.cancel()
+                        predictor_task = None
+                    await websocket.send_json({"type": "status", "message": "analysis_stopped"})
+                    continue
+
+                # --- Configure cadence ---
+                if "predict_every" in data:
+                    try:
+                        val = int(data["predict_every"])
+                        if val <= 0:
+                            raise ValueError("Must be positive")
+                        predict_every_frames = val
+                        await websocket.send_json({"type": "status", "message": f"predict_every_frames set to {val}"})
+                    except (ValueError, TypeError) as e:
+                        await websocket.send_json({"type": "error", "message": f"Invalid predict_every: {e}"})
+                    continue
+
+                if "predict_every_seconds" in data:
+                    try:
+                        val = int(data["predict_every_seconds"])
+                        if val <= 0:
+                            raise ValueError("Must be positive")
+                        predict_every_seconds = val
+                        if running:
+                            if predictor_task:
+                                predictor_task.cancel()
+                            predictor_task = asyncio.create_task(
+                                send_prediction_every_interval(val)
+                            )
+                        await websocket.send_json({"type": "status", "message": f"predict_every_seconds set to {val}s"})
+                    except (ValueError, TypeError) as e:
+                        await websocket.send_json({"type": "error", "message": f"Invalid predict_every_seconds: {e}"})
+                    continue
+
+                # --- Handle base64 frame ---
+                frame_b64 = data.get("frame")
+                if isinstance(frame_b64, str):
+                    try:
+                        if frame_b64.startswith("data:"):
+                            frame_b64 = frame_b64.split(",", 1)[1]
+                        latest_frame_bytes = base64.b64decode(frame_b64)
+                        frame_count += 1
+                        await websocket.send_json({"type": "ack", "frame_count": frame_count})
+                        if running and predict_every_frames and frame_count % predict_every_frames == 0:
+                            asyncio.create_task(
+                                _run_prediction(latest_frame_bytes))
+                    except Exception as e:
+                        await websocket.send_json({"type": "error", "message": f"Base64 decode failed: {e}"})
+                    continue
+
+                await websocket.send_json({"type": "error", "message": "Unknown command"})
 
     except WebSocketDisconnect:
-        # client disconnected
-        return
+        pass
+    finally:
+        running = False
+        if predictor_task:
+            predictor_task.cancel()
+        print("WebSocket /ws/predict disconnected")

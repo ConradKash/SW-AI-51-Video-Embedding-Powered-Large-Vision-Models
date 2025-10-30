@@ -1,338 +1,428 @@
 import streamlit as st
-import cv2
-from PIL import Image
-import time
-from datetime import datetime
+import asyncio
+import websockets
+import json
 import base64
-from io import BytesIO
+import cv2
+import av
+import numpy as np
+from streamlit_webrtc import webrtc_streamer, WebRtcMode
+import queue
+import threading
+import time
 
-# Set page config
+# Page configuration
 st.set_page_config(
-    page_title="Real-time AI Video Analysis",
-    layout="wide",
-    initial_sidebar_state="collapsed"
+    page_title="Real-Time Dental Diagnosis",
+    page_icon="🦷",
+    layout="wide"
 )
 
-# Custom CSS for chat interface
+# Custom CSS for better styling
 st.markdown("""
 <style>
-.stApp {
-    background: linear-gradient(135deg, #1a2a6c, #b21f1f, #1a2a6c);
-}
-.chat-container {
-    background: rgba(0, 0, 0, 0.7);
-    border-radius: 15px;
-    padding: 20px;
-    height: 70vh;
-    overflow-y: auto;
-    margin-bottom: 20px;
-}
-.message {
-    max-width: 85%;
-    padding: 12px 16px;
-    border-radius: 18px;
-    margin-bottom: 15px;
-    animation: fadeIn 0.3s ease;
-}
-@keyframes fadeIn {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-.ai-message {
-    background: rgba(74, 144, 226, 0.3);
-    align-self: flex-start;
-    border-bottom-left-radius: 5px;
-}
-.user-message {
-    background: rgba(46, 204, 113, 0.3);
-    align-self: flex-end;
-    border-bottom-right-radius: 5px;
-    margin-left: auto;
-}
-.prediction-result {
-    background: rgba(231, 76, 60, 0.2);
-    padding: 10px;
-    border-radius: 8px;
-    margin-top: 8px;
-    font-weight: 600;
-}
-.confidence {
-    float: right;
-    font-size: 0.9rem;
-    opacity: 0.8;
-}
-.status-indicator {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    background: rgba(0, 0, 0, 0.7);
-    padding: 8px 12px;
-    border-radius: 20px;
-    font-size: 0.9rem;
-    width: fit-content;
-}
-.status-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: #e74c3c;
-}
-.status-dot.active {
-    background: #2ecc71;
-    box-shadow: 0 0 10px #2ecc71;
-}
+    .prediction-card {
+        background-color: #f0f2f6;
+        border-radius: 10px;
+        padding: 15px;
+        margin: 10px 0;
+        border-left: 5px solid #ff4b4b;
+    }
+    .confidence-bar {
+        height: 8px;
+        background-color: #e0e0e0;
+        border-radius: 4px;
+        margin: 5px 0;
+    }
+    .confidence-fill {
+        height: 100%;
+        background-color: #ff4b4b;
+        border-radius: 4px;
+    }
+    .chat-message {
+        padding: 10px;
+        margin: 5px 0;
+        border-radius: 10px;
+        max-width: 80%;
+    }
+    .user-message {
+        background-color: #0078ff;
+        color: white;
+        margin-left: auto;
+    }
+    .ai-message {
+        background-color: #f1f1f1;
+        color: black;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Initialize session state
-if 'messages' not in st.session_state:
-    st.session_state.messages = [
-        {"role": "ai", "content": "Hello! I'm ready to analyze your video feed in real-time. Start the analysis to begin."}
-    ]
-if 'analysis_active' not in st.session_state:
-    st.session_state.analysis_active = False
-if 'prediction_count' not in st.session_state:
-    st.session_state.prediction_count = 0
-if 'last_prediction_time' not in st.session_state:
-    st.session_state.last_prediction_time = 0
-if 'captured_frame' not in st.session_state:
-    # stored as JPEG bytes
-    st.session_state.captured_frame = None
-if 'capture_request' not in st.session_state:
-    # flag used to request a capture from the live video loop
-    st.session_state.capture_request = False
 
-# Function to send frame to AI model (replace with your actual API endpoint)
+class VideoProcessor:
+    def __init__(self):
+        self.frame_queue = queue.Queue(maxsize=10)
+        self.prediction_queue = queue.Queue()
+        self.websocket_uri = "ws://localhost:8000/ws/predict"
+        self.connected = False
+        self.websocket = None
+        self.processing = False
+        # send_mode: 'binary' or 'text_base64'
+        self.send_mode = 'binary'
+        # how many frames to skip between predictions (control sent to server)
+        self.predict_every = 5
 
-
-def send_frame_to_model(frame):
-    """
-    Sends frame to AI model and returns prediction.
-    Replace this with your actual API call.
-    """
-    # Convert frame to base64 for API transmission
-    _, buffer = cv2.imencode('.jpg', frame)
-    frame_base64 = base64.b64encode(buffer).decode('utf-8')
-
-    # Example API call structure (replace with your actual endpoint)
-    # api_url = "https://your-api-endpoint.com/predict"
-    # response = requests.post(api_url, json={"image": frame_base64})
-    # return response.json()
-
-    # Simulate API response with random predictions
-    import random
-    predictions = [
-        {"label": "Healthy Tooth", "confidence": 92},
-        {"label": "Cavity Detected", "confidence": 87},
-        {"label": "Gum Inflammation", "confidence": 78},
-        {"label": "Plaque Buildup", "confidence": 85},
-        {"label": "Healthy Tooth", "confidence": 95},
-        {"label": "Cracked Tooth", "confidence": 82}
-    ]
-    return random.choice(predictions)
-
-# Function to add message to chat
-
-
-def add_message(role, content, prediction=None):
-    st.session_state.messages.append({
-        "role": role,
-        "content": content,
-        "prediction": prediction,
-        "timestamp": datetime.now().strftime("%H:%M")
-    })
-
-# Function to process video frame
-
-
-def process_frame(frame):
-    # Add timestamp to frame
-    cv2.putText(frame, datetime.now().strftime("%H:%M:%S"),
-                (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-
-    # Send to model if enough time has passed (simulate 1.5s interval)
-    current_time = time.time()
-    if current_time - st.session_state.last_prediction_time > 1.5:
+    async def connect_websocket(self):
+        """Connect to FastAPI WebSocket endpoint"""
         try:
-            prediction = send_frame_to_model(frame)
-            add_message(
-                "ai", f"Analysis complete: {prediction['label']}", prediction)
-            st.session_state.prediction_count += 1
-            st.session_state.last_prediction_time = current_time
+            self.websocket = await websockets.connect(self.websocket_uri)
+            self.connected = True
+            return True
         except Exception as e:
-            add_message("system", f"Error: {str(e)}")
+            st.error(f"❌ Connection failed: {e}")
+            return False
 
-    return frame
+    async def send_frame(self, frame):
+        """Send frame to WebSocket endpoint"""
+        if self.connected and self.websocket:
+            try:
+                # Convert frame to bytes
+                _, buffer = cv2.imencode('.jpg', frame)
+                frame_bytes = buffer.tobytes()
+
+                if self.send_mode == 'binary':
+                    # send as binary bytes
+                    await self.websocket.send(frame_bytes)
+                else:
+                    # send as text JSON with base64-encoded frame under key 'frame'
+                    b64 = base64.b64encode(frame_bytes).decode('ascii')
+                    payload = json.dumps({"frame": b64})
+                    await self.websocket.send(payload)
+
+                prediction = await self.websocket.recv()
+                return prediction
+            except Exception as e:
+                st.error(f"❌ WebSocket error: {e}")
+                self.connected = False
+                return None
+        return None
+
+    async def send_control_message(self, control: dict):
+        """Send a JSON control message over the websocket (text).
+
+        Example: {"predict_every": 5}
+        The server expects text JSON control messages and will adjust behavior.
+        """
+        if self.connected and self.websocket:
+            try:
+                payload = json.dumps({"type": "control", **control})
+                await self.websocket.send(payload)
+                # Optionally read ack
+                try:
+                    ack = await asyncio.wait_for(self.websocket.recv(), timeout=1.0)
+                except Exception:
+                    ack = None
+                return ack
+            except Exception as e:
+                st.error(f"❌ Failed to send control message: {e}")
+                return None
+        return None
+
+    def recv(self, frame):
+        """Process incoming frames from webcam"""
+        if self.processing:
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame_resized = cv2.resize(frame_rgb, (224, 224))
+
+            if not self.frame_queue.full():
+                self.frame_queue.put(frame_resized)
+
+            return frame_rgb
+        return frame
+
+    async def process_frames(self):
+        """Process frames from queue and send to WebSocket"""
+        while self.processing:
+            try:
+                if not self.frame_queue.empty():
+                    frame = self.frame_queue.get(timeout=1)
+                    prediction_data = await self.send_frame(frame)
+
+                    if prediction_data:
+                        try:
+                            prediction = json.loads(prediction_data)
+                            self.prediction_queue.put(prediction)
+                        except json.JSONDecodeError:
+                            self.prediction_queue.put(
+                                {"prediction": prediction_data})
+
+            except queue.Empty:
+                continue
+            except Exception as e:
+                st.error(f"❌ Processing error: {e}")
+                await asyncio.sleep(0.1)
 
 
-# Main layout
-col1, col2 = st.columns([2, 1])
+def main():
+    # Initialize session state at the VERY beginning
+    if 'predictions' not in st.session_state:
+        st.session_state.predictions = []
+    if 'processor' not in st.session_state:
+        st.session_state.processor = VideoProcessor()
+    if 'analysis_started' not in st.session_state:
+        st.session_state.analysis_started = False
+    if 'websocket_connected' not in st.session_state:
+        st.session_state.websocket_connected = False
+    if 'camera_active' not in st.session_state:
+        st.session_state.camera_active = False
 
-with col1:
-    st.markdown("### 📹 Real-time Video Feed")
+    st.title("🦷 Real-Time Dental Diagnosis AI")
+    st.markdown("Live video analysis for dental conditions using AI")
 
-    # Status indicator
-    status_placeholder = st.empty()
-    with status_placeholder.container():
-        if st.session_state.analysis_active:
-            st.markdown('<div class="status-indicator"><div class="status-dot active"></div><span>Connected</span></div>',
-                        unsafe_allow_html=True)
+    # Sidebar for controls
+    with st.sidebar:
+        st.header("🔧 Controls")
+
+        # Server configuration
+        st.subheader("Server Settings")
+        server_ip = st.text_input(
+            "Server IP", value="localhost", key="server_ip")
+        server_port = st.number_input(
+            "Port", value=8000, min_value=1000, max_value=9999)
+
+        # Prediction cadence and send mode
+        predict_every = st.number_input(
+            "Predict every N frames", value=5, min_value=1, max_value=60)
+        send_as_base64 = st.checkbox(
+            "Send frames as base64 text (instead of binary)", value=False)
+
+        # Update WebSocket URI and processor settings
+        st.session_state.processor.websocket_uri = f"ws://{server_ip}:{server_port}/ws/predict"
+        # configure processor send mode and cadence
+        st.session_state.processor.send_mode = 'text_base64' if send_as_base64 else 'binary'
+        st.session_state.processor.predict_every = int(predict_every)
+
+        # Connection controls
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🟢 Connect", use_container_width=True):
+                async def connect():
+                    success = await st.session_state.processor.connect_websocket()
+                    st.session_state.websocket_connected = success
+                    if success:
+                        # send control message so server knows the cadence
+                        try:
+                            await st.session_state.processor.send_control_message({"predict_every": int(predict_every)})
+                        except Exception:
+                            pass
+                        st.success("✅ Connected to AI server")
+                    return success
+
+                # Run the async connection
+                import asyncio
+                asyncio.run(connect())
+                st.rerun()
+
+        with col2:
+            if st.button("🔴 Disconnect", use_container_width=True):
+                st.session_state.processor.connected = False
+                st.session_state.processor.processing = False
+                st.session_state.analysis_started = False
+                st.session_state.websocket_connected = False
+                st.session_state.camera_active = False
+                st.warning("Disconnected from server")
+                st.rerun()
+
+        # Connection status
+        if st.session_state.websocket_connected:
+            st.success("✅ Connected to server")
         else:
-            st.markdown('<div class="status-indicator"><div class="status-dot"></div><span>Disconnected</span></div>',
-                        unsafe_allow_html=True)
+            st.error("❌ Not connected to server")
 
-    # Video display
-    video_placeholder = st.empty()
+        st.markdown("---")
+        st.subheader("📊 Statistics")
+        st.metric("Total Predictions", len(st.session_state.predictions))
 
-    # Controls
-    control_col1, control_col2, control_col3 = st.columns(3)
-    with control_col1:
-        start_btn = st.button("▶ Start Analysis", use_container_width=True,
-                              disabled=st.session_state.analysis_active)
-    with control_col2:
-        stop_btn = st.button("⏹ Stop Analysis", use_container_width=True,
-                             disabled=not st.session_state.analysis_active)
-    with control_col3:
-        capture_btn = st.button("📷 Capture Frame", use_container_width=True)
+        if st.session_state.predictions:
+            latest_pred = st.session_state.predictions[-1]
+            if isinstance(latest_pred, dict) and 'confidence' in latest_pred:
+                st.metric("Latest Confidence",
+                          f"{latest_pred['confidence']:.2%}")
 
-    # Instructions
-    st.markdown("<div style='text-align: center; margin-top: 10px; opacity: 0.7;'>Allow camera access to begin real-time analysis</div>",
-                unsafe_allow_html=True)
-
-with col2:
-    st.markdown("### 💬 AI Predictions")
-    st.markdown(f"**Predictions:** {st.session_state.prediction_count}")
-
-    # Chat container
-    chat_container = st.container()
-    with chat_container:
-        st.markdown('<div class="chat-container">', unsafe_allow_html=True)
-        for msg in st.session_state.messages:
-            role_class = "ai-message" if msg["role"] == "ai" else "user-message"
-            st.markdown(f"""
-            <div class="message {role_class}">
-                <div style="display: flex; justify-content: space-between; margin-bottom: 5px; font-size: 0.85rem; opacity: 0.8;">
-                    <span>{'AI Model' if msg['role'] == 'ai' else 'You'}</span>
-                    <span>{msg.get('timestamp', 'Just now')}</span>
-                </div>
-                <div>{msg['content']}</div>
-                {f'''
-                <div class="prediction-result">
-                    Prediction: {msg['prediction']['label']}
-                    <span class="confidence">{msg['prediction']['confidence']}%</span>
-                </div>
-                ''' if msg.get('prediction') else ''}
-            </div>
-            """, unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # Model info
-    st.markdown("""
-    <div style="background: rgba(0, 0, 0, 0.8); padding: 10px; border-radius: 8px; text-align: center; font-size: 0.9rem; opacity: 0.8; margin-top: 10px;">
-        Connected to: Tooth Analysis Model v2.1 | Confidence threshold: 85%
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Preview of last captured frame
-    st.markdown("### 🎞️ Recording Preview")
-    if st.session_state.captured_frame:
-        # Show the preview image and a download button
-        st.image(st.session_state.captured_frame, use_column_width=True)
-        st.download_button("⬇️ Download Capture", data=st.session_state.captured_frame,
-                           file_name="capture.jpg", mime="image/jpeg")
-        if st.button("Clear Preview"):
-            st.session_state.captured_frame = None
-            st.experimental_rerun()
-    else:
-        st.markdown("No capture yet. Press 📷 Capture Frame to take a snapshot.")
-
-# Handle button clicks
-if start_btn:
-    st.session_state.analysis_active = True
-    add_message(
-        "system", "Real-time analysis started. Sending frames to AI model...")
-    st.rerun()
-
-if stop_btn:
-    st.session_state.analysis_active = False
-    add_message("system", "Real-time analysis stopped.")
-    st.rerun()
-
-# Capture button behavior:
-if capture_btn:
-    # If live analysis is running, request capture from the video loop
-    if st.session_state.analysis_active:
-        st.session_state.capture_request = True
-        add_message("system", "Capture requested — will save next frame.")
-        st.rerun()
-    else:
-        # If not running, open webcam once, grab a frame and store it
-        cap_one = cv2.VideoCapture(0)
-        if not cap_one.isOpened():
-            st.error(
-                "Cannot access camera to capture frame. Ensure permissions are granted.")
-        else:
-            ret_one, frame_one = cap_one.read()
-            cap_one.release()
-            if not ret_one or frame_one is None:
-                st.error("Failed to capture frame")
+        # Arbitrary control message sender for debugging
+        st.markdown("---")
+        st.subheader("🔁 Control / Debug")
+        control_text = st.text_area(
+            "Control JSON (e.g. {\"predict_every\":5})", value='')
+        if st.button("Send Control Message", use_container_width=True):
+            if control_text.strip() == "":
+                st.error("Enter JSON to send")
             else:
                 try:
-                    _, buf = cv2.imencode('.jpg', frame_one)
-                    st.session_state.captured_frame = buf.tobytes()
-                    add_message("user", "Captured a frame for analysis")
+                    control_obj = json.loads(control_text)
                 except Exception as e:
-                    st.error(f"Error encoding captured frame: {e}")
-        st.rerun()
+                    st.error(f"Invalid JSON: {e}")
+                    control_obj = None
 
-# Video processing loop
-if st.session_state.analysis_active:
-    # Initialize camera
-    cap = cv2.VideoCapture(0)
-
-    if not cap.isOpened():
-        st.error(
-            "Cannot access camera. Please ensure you have a webcam and permissions are granted.")
-    else:
-        try:
-            while st.session_state.analysis_active:
-                ret, frame = cap.read()
-                if not ret:
-                    st.error("Failed to capture frame")
-                    break
-
-                # Process frame
-                processed_frame = process_frame(frame)
-
-                # If a capture was requested, save this processed frame as JPEG bytes
-                if st.session_state.capture_request:
+                if control_obj is not None:
+                    import asyncio as _asyncio
                     try:
-                        _, buf = cv2.imencode('.jpg', processed_frame)
-                        st.session_state.captured_frame = buf.tobytes()
-                        add_message("user", "Captured a frame (live).")
+                        ack = _asyncio.run(
+                            st.session_state.processor.send_control_message(control_obj))
+                        st.success("Control message sent")
+                        if ack:
+                            st.write("Ack:", ack)
                     except Exception as e:
-                        add_message("system", f"Capture failed: {e}")
-                    finally:
-                        st.session_state.capture_request = False
+                        st.error(f"Failed to send control message: {e}")
 
-                # Convert to RGB for Streamlit
-                rgb_frame = cv2.cvtColor(processed_frame, cv2.COLOR_BGR2RGB)
-                video_placeholder.image(
-                    rgb_frame, channels="RGB", use_column_width=True)
+    # Main content area
+    col1, col2 = st.columns([2, 1])
 
-                # Add small delay to prevent excessive CPU usage
-                time.sleep(0.1)
+    with col1:
+        st.subheader("📹 Live Camera Feed")
 
-        except Exception as e:
-            st.error(f"Error during video processing: {str(e)}")
-        finally:
-            cap.release()
+        # Control buttons above video
+        control_col1, control_col2 = st.columns(2)
+        with control_col1:
+            if st.button("▶️ Start Analysis", use_container_width=True):
+                if st.session_state.websocket_connected:
+                    st.session_state.processor.processing = True
+                    st.session_state.analysis_started = True
+                    st.session_state.camera_active = True
+                    # Start processing in background thread
+                    threading.Thread(
+                        target=run_async_processing, daemon=True).start()
+                    st.success("🎬 Analysis started")
+                    st.rerun()
+                else:
+                    st.error("❌ Please connect to server first")
 
-    # Reset after stopping
-    if not st.session_state.analysis_active:
-        video_placeholder.empty()
-        st.rerun()
+        with control_col2:
+            if st.button("⏹️ Stop Analysis", use_container_width=True):
+                st.session_state.processor.processing = False
+                st.session_state.analysis_started = False
+                st.info("⏹️ Analysis stopped")
+                st.rerun()
 
-# Footer
-st.markdown("<div style='text-align: center; margin-top: 20px; opacity: 0.7;'>Real-time AI Video Analysis System</div>",
-            unsafe_allow_html=True)
+        # Only show camera if analysis is started
+        if st.session_state.camera_active:
+            webrtc_ctx = webrtc_streamer(
+                key="dental-camera",
+                mode=WebRtcMode.SENDRECV,
+                rtc_configuration={"iceServers": [
+                    {"urls": ["stun:stun.l.google.com:19302"]}]},
+                # Create a fresh VideoProcessor inside the worker to avoid
+                # accessing Streamlit session_state from the worker thread
+                # (which raises AttributeError). The session_state-held
+                # processor is used for UI/state; the worker will have its
+                # own processor instance for frame handling.
+                video_processor_factory=lambda: VideoProcessor(),
+                media_stream_constraints={
+                    "video": {
+                        "width": {"ideal": 640},
+                        "height": {"ideal": 480},
+                        "frameRate": {"ideal": 15}
+                    },
+                    "audio": False
+                },
+            )
+        else:
+            st.info("👆 Click 'Start Analysis' to activate camera")
+
+        # Analysis status
+        if st.session_state.analysis_started:
+            st.success("🔍 Analysis running - processing frames")
+        else:
+            st.info("⏸️ Analysis paused")
+
+    with col2:
+        st.subheader("🧠 AI Predictions")
+
+        # Prediction display area
+        prediction_container = st.container(height=500)
+
+        with prediction_container:
+            if not st.session_state.predictions:
+                st.info(
+                    "👆 Connect to server and start analysis to see predictions here")
+            else:
+                for i, pred in enumerate(reversed(st.session_state.predictions[-10:])):
+                    display_prediction(pred, i)
+
+        # Clear predictions button
+        if st.button("🗑️ Clear Predictions", use_container_width=True):
+            st.session_state.predictions.clear()
+            st.rerun()
+
+    # Process incoming predictions
+    process_predictions()
+
+
+def run_async_processing():
+    """Run async processing in a separate thread"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(st.session_state.processor.process_frames())
+
+
+def process_predictions():
+    """Process predictions from queue and update session state"""
+    processor = st.session_state.processor
+    try:
+        while not processor.prediction_queue.empty():
+            prediction = processor.prediction_queue.get_nowait()
+            st.session_state.predictions.append(prediction)
+            # Use experimental_rerun to avoid recursion issues
+            st.rerun()
+    except queue.Empty:
+        pass
+
+
+def display_prediction(prediction, index):
+    """Display a prediction in chat-like format"""
+    current_time = time.strftime('%H:%M:%S')
+
+    if isinstance(prediction, dict):
+        if 'class' in prediction and 'confidence' in prediction:
+            confidence = prediction['confidence']
+            class_name = prediction['class']
+
+            confidence_html = f"""
+            <div class="confidence-bar">
+                <div class="confidence-fill" style="width: {confidence * 100}%"></div>
+            </div>
+            <small>Confidence: {confidence:.2%}</small>
+            """
+
+            st.markdown(f"""
+            <div class="chat-message ai-message">
+                <strong>🦷 Diagnosis:</strong> {class_name.replace('_', ' ').title()}
+                {confidence_html}
+                <small style="color: #666;">{current_time}</small>
+            </div>
+            """, unsafe_allow_html=True)
+        elif 'prediction' in prediction:
+            st.markdown(f"""
+            <div class="chat-message ai-message">
+                <strong>AI:</strong> {prediction['prediction']}
+                <small style="color: #666;">{current_time}</small>
+            </div>
+            """, unsafe_allow_html=True)
+        else:
+            st.markdown(f"""
+            <div class="chat-message ai-message">
+                <strong>AI:</strong> {str(prediction)}
+                <small style="color: #666;">{current_time}</small>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.markdown(f"""
+        <div class="chat-message ai-message">
+            <strong>AI:</strong> {str(prediction)}
+            <small style="color: #666;">{current_time}</small>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# Streamlit executes this file as a script (not __main__), so call main()
+# unconditionally to ensure session state is initialized and UI is built.
+main()
