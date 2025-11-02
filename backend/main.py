@@ -1,5 +1,5 @@
-from backend.function import predict, predict_from_bytes
-from fastapi import FastAPI, File, UploadFile
+from backend.function import predict, predict_from_bytes, model_status, _load_model
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import secrets
@@ -42,6 +42,34 @@ def read_root():
     return {"Hello": "World"}
 
 
+@app.get("/health")
+def health_check():
+    """Basic health endpoint that reports model load status.
+    Returns 200 even when model is missing so orchestration can still probe
+    the service; the payload includes model.loaded boolean.
+    """
+    try:
+        status = model_status()
+        return {"status": "ok", "model": status}
+    except Exception as e:
+        return {"status": "ok", "model": {"loaded": False, "path": "unknown", "error": str(e)}}
+
+
+@app.on_event("startup")
+async def try_eager_load_model():
+    """Attempt to load model at startup if the weights are present. This is
+    optional — failure will not stop the app. Useful when `models/` is
+    mounted into the container so the model can be available immediately.
+    """
+    try:
+        _load_model()
+        print(f"Model loaded eagerly at startup: {model_status()}")
+    except FileNotFoundError:
+        print("Model weights not found at startup; will load lazily on first prediction.")
+    except Exception as e:
+        print("Unexpected error while eager-loading model:", e)
+
+
 @app.post("/predict")
 async def make_prediction(file: UploadFile = File(...)):
     file_name = file.filename
@@ -62,8 +90,19 @@ async def make_prediction(file: UploadFile = File(...)):
         f.write(file_content)
     print(f"File saved at: {generated_name}")
 
-    predicted_class, confidence = predict(generated_name)
-    return {"predicted_class": predicted_class, "confidence": confidence}
+    try:
+        predicted_class, confidence = predict(generated_name)
+        # predict may return (None, Exception) on error — normalize that
+        if predicted_class is None and isinstance(confidence, Exception):
+            raise HTTPException(status_code=500, detail=str(confidence))
+        return {"predicted_class": predicted_class, "confidence": confidence}
+    except RuntimeError as e:
+        # RuntimeError used for missing model file; map to 503 Service Unavailable
+        raise HTTPException(status_code=503, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.websocket("/ws/predict")

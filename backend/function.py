@@ -1,4 +1,5 @@
 import open_clip
+import os
 import torch
 import torch.nn as nn
 from PIL import Image
@@ -86,12 +87,52 @@ class CustomCLIPVisionTransformer(nn.Module):
         return logits
 
 
-best_model_clip = CustomCLIPVisionTransformer(num_classes)
-path = f"{BASE_DIR}/models/best_model_clip.pth"
-best_model_clip.load_state_dict(torch.load(
-    path, map_location=torch.device('cpu')))
-best_model_clip.to(device)
-best_model_clip.eval()
+# Model loading: make it lazy and resilient so the server can start even if the
+# model artifact is not present in the image. This is common during development
+# where `models/` is mounted at runtime or kept out of the image.
+
+# Allow overriding the model file location with an env var for flexibility.
+env_model_path = os.environ.get("MODEL_FILE") or os.environ.get("MODEL_PATH")
+if env_model_path:
+    MODEL_PATH = Path(env_model_path)
+else:
+    MODEL_PATH = BASE_DIR / "models" / "best_model_clip.pth"
+
+best_model_clip = None  # populated by _load_model()
+_model_loaded = False
+
+
+def _load_model():
+    """Load the model weights into memory. Raises FileNotFoundError with a
+    helpful message if the model artifact is missing.
+    """
+    global best_model_clip, _model_loaded
+    if _model_loaded:
+        return
+
+    if not MODEL_PATH.exists():
+        raise FileNotFoundError(
+            f"Model file not found at {MODEL_PATH!s}.\n"
+            "Provide the weights file at that path (mount ./models into /app/models),\n"
+            "or set the environment variable MODEL_FILE or MODEL_PATH to the correct location."
+        )
+
+    best_model_clip = CustomCLIPVisionTransformer(num_classes)
+    state = torch.load(MODEL_PATH, map_location=torch.device('cpu'))
+    best_model_clip.load_state_dict(state)
+    best_model_clip.to(device)
+    best_model_clip.eval()
+    _model_loaded = True
+
+
+def model_status():
+    """Return a small dict describing model load status and path. Useful for
+    health checks and readiness probes.
+    """
+    try:
+        return {"loaded": bool(_model_loaded), "path": str(MODEL_PATH)}
+    except Exception:
+        return {"loaded": False, "path": str(MODEL_PATH) if 'MODEL_PATH' in globals() else "unknown"}
 
 
 def predict(image_path):
@@ -111,6 +152,8 @@ def predict(image_path):
             - "probs": list of probabilities (0-100) corresponding to indices
     """
     try:
+        # Ensure the model weights are loaded (may raise FileNotFoundError)
+        _load_model()
         # Load and preprocess image
         input_image = Image.open(image_path).convert('RGB')
         preprocess = transforms.Compose([
@@ -147,6 +190,9 @@ def predict(image_path):
 
         return predicted_class, confidence
 
+    except FileNotFoundError as e:
+        # Make the error explicit upstream
+        raise RuntimeError(str(e)) from e
     except Exception as e:
         print(f"Error processing {image_path}: {e}")
         return None, e
@@ -168,6 +214,8 @@ def predict_from_bytes(frame_bytes: bytes):
     Returns: (predicted_class: str, confidence: float)
     """
     try:
+        # Ensure the model is loaded
+        _load_model()
         image = Image.open(io.BytesIO(frame_bytes)).convert("RGB")
         input_tensor = preprocess(image).unsqueeze(0).to(device)
 
