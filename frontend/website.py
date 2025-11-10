@@ -257,7 +257,7 @@ with col1:
     # Server configuration
     with st.expander("⚙️ Settings", expanded=False):
         server_url = st.text_input(
-            "WebSocket Server URL", "ws://localhost:8000/ws/predict")
+            "WebSocket Server URL", "ws://13.60.82.136:8000/ws/predict")
         st.caption("Make sure your FastAPI server is running at this address")
 
     # Video component

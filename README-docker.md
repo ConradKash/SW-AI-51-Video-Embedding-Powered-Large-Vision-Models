@@ -56,21 +56,19 @@ Run with docker-compose (development)
 
 ```bash
 docker-compose up --build
-```
-
-Model weights (recommended: mount at runtime)
+## Model weights (recommended: mount at runtime)
 --------------------------------------------
 
 Large model files (PyTorch `.pth`) should usually be kept out of the image for development. Mount your local `models/` directory into the container at runtime and tell the backend where the file is located:
 
-```bash
+`bash
 docker run --rm \
-	-e USE_SUPERVISOR=1 \
-	-e MODEL_FILE=/app/models/best_model_clip.pth \
-	-p 8000:8000 -p 8501:8501 \
-	-v "$(pwd)/models:/app/models:ro" \
-	dental-app:latest
-```
+ -e USE_SUPERVISOR=1 \
+ -e MODEL_FILE=/app/models/best_model_clip.pth \
+ -p 8000:8000 -p 8501:8501 \
+ -v "$(pwd)/models:/app/models:ro" \
+ dental-app:latest
+`
 
 - Default model path (inside the container): `/app/models/best_model_clip.pth`.
 - You can override the path with `MODEL_FILE` or `MODEL_PATH` environment variables.
@@ -109,19 +107,19 @@ Troubleshooting
 ---------------
 
 - Build fails with `cannot allocate memory` during `apt-get` or `pip install`:
-	- On macOS Docker Desktop increase the VM memory (Preferences → Resources → Memory) to 6–8 GB and retry.
-	- Or build on a machine / CI runner with more memory.
-	- Use `--prefer-binary` for pip to prefer wheels (reduces compile memory usage).
+  - On macOS Docker Desktop increase the VM memory (Preferences → Resources → Memory) to 6–8 GB and retry.
+  - Or build on a machine / CI runner with more memory.
+  - Use `--prefer-binary` for pip to prefer wheels (reduces compile memory usage).
 
 - `GET /health` shows `model.loaded: false` even though you mounted `./models`:
-	- Confirm the mounted file is present in the container:
+  - Confirm the mounted file is present in the container:
 
-		```bash
-		docker run --rm -v "$(pwd)/models:/app/models:ro" dental-app:latest ls -l /app/models
-		```
+  ```bash
+  docker run --rm -v "$(pwd)/models:/app/models:ro" dental-app:latest ls -l /app/models
+  ```
 
-	- Confirm you set `MODEL_FILE` to the correct internal path (e.g. `/app/models/best_model_clip.pth`).
-	- Check container logs for the startup loader message — the server prints whether it loaded the model at startup.
+  - Confirm you set `MODEL_FILE` to the correct internal path (e.g. `/app/models/best_model_clip.pth`).
+  - Check container logs for the startup loader message — the server prints whether it loaded the model at startup.
 
 - If `/predict` returns a 503 with a message about the model file not found, mount the model file or set `MODEL_FILE` as shown above.
 
@@ -158,6 +156,6 @@ If something fails or you want me to add an automated `scripts/create_dummy_mode
 Verification
 ------------
 
-- Backend docs: http://localhost:8000/docs
-- Health: http://localhost:8000/health
-- Frontend: http://localhost:8501
+- Backend docs: <http://localhost:8000/docs>
+- Health: <http://localhost:8000/health>
+- Frontend: <http://localhost:8501>
